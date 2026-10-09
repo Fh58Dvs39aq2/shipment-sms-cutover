@@ -1,0 +1,2 @@
+"""Shipment SMS alert service."""
+
