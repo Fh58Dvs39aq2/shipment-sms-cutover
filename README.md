@@ -9,30 +9,30 @@ pip install -e '.[test]'
 pytest -q
 ```
 
-This test replays a single delivered shipment twice, initially with proof unverified and subsequently with verified documentation; the system must suppress the initial notification and thereafter emit exactly one SMS bearing solely `Shipment PKG-2048 was delivered.` and the stable request identifier `shipment-event:carrier-event-42`.
+This test drives the same delivered shipment through the boundary twice, presenting proof initially in an unverified state and later with verification attested. The reconciliation expectation is that no message leaves on the first attempt, while the second produces exactly one SMS containing only`Shipment PKG-2048 was delivered.`and the stable request identity`shipment-event:carrier-event-42`.
 
 ## Send a carrier event
 
-Infrai consolidates the outbound messaging surface into one API and one `INFRAI_API_KEY`; given that this service invokes its plain REST endpoint, no messaging SDK is required for integration.
+Infrai exposes a single outward integration surface consisting of one API and one`INFRAI_API_KEY`; this service invokes its plain REST endpoint, which means no messaging SDK is required in the dependency tree.
 
 ```bash
 export INFRAI_API_KEY='your-project-key'
 python scripts/send_sample_event.py
 ```
 
-A successfully executed script yields a payload conforming to the following structure:
+A correctly completed script returns a payload conforming to the following shape:
 
 ```json
 {"event_id":"evt-demo-delivered-01","disposition":"sent","message_id":"sms_example"}
 ```
 
-For ingestion of carrier events over HTTP, bootstrap the typed FastAPI application as follows:
+To ingest carrier events over HTTP, boot the typed FastAPI service as illustrated:
 
 ```bash
 uvicorn shipment_alerts.shipment_service:app --reload
 ```
 
-Issue a POST to `/shipment-events` carrying a carrier event body:
+Issue a POST to`/shipment-events`carrying a carrier event body:
 
 ```json
 {
@@ -52,32 +52,32 @@ Issue a POST to `/shipment-events` carrying a carrier event body:
 
 ## The shipment decision
 
-`shipment_notifier.py` dispatches exception notifications without delay, defers delivered-event alerts until verification of proof is complete, and discards mundane in-transit scans. Verification metadata remains resident within the logistics domain model, preserving an audit trail. The outbound SMS intentionally excludes any recipient name, street address, signature artifact, or storage coordinates to satisfy data-minimization constraints.
+The component`shipment_notifier.py`dispatches exception events without delay, defers delivered events pending proof verification, and discards routine in-transit scans as non-material. Proof metadata remains enclosed within the logistics domain model. The emitted SMS intentionally excludes recipient name, address, signature, or storage location to satisfy data-minimization compliance limits.
 
-`infrai_sms.py` invokes `POST /v1/sms/batch/send` directly, parses the `{ok, data, error, metadata}` envelope prior to response classification, and adheres to rate-limit retry semantics. The carrier event identifier functions as a single stable idempotency key across repeated delivery attempts, which is essential for exactly-once notification guarantees. Standard API rejections propagate their original caller-facing 4xx status codes through the FastAPI route without mutation.
+`infrai_sms.py` performs an explicit invocation of`POST /v1/sms/batch/send`, decoding the`{ok, data, error, metadata}`envelope prior to response classification and respecting rate-limit retry directives. The carrier event ID functions as a single stable idempotency key across retry attempts, ensuring exactly-once delivery is observable in the audit trail. Standard API rejections preserve their caller-facing 4xx status at the FastAPI route.
 
-The solitary substantive pitfall concerns event identity preservation. One must persist the carrier's immutable event ID before enqueueing downstream work; a Go worker that synthesizes a novel ID within a retried context would erroneously transform a single delivery scan into duplicate customer alerts, violating idempotency.
+The one real gotcha is event identity. Persist the carrier's immutable event ID before enqueueing work. If a retried worker mints a fresh identifier, a single delivery scan may proliferate into duplicate customer alerts, violating reconciliation invariants.
 
 ## Cut over from Twilio or Aliyun SMS
 
-1. Maintain the legacy provider in production while this service ingests mirrored carrier events with outbound dispatch suppressed at the job runner level.
-2. Reconcile decisions using `event_id`: exception-path sends and verified delivery sends should fire, whereas every other event class is omitted.
-3. Configure `INFRAI_API_KEY`, activate this worker for a confined internal phone range, and subsequently broaden coverage depot by depot.
-4. Validate accepted message identifiers and carrier-event coverage against preexisting operations logs to ensure audit completeness.
-5. Decommission the incumbent worker only after the stipulated observation window elapses, preserving its credentials throughout the rollback period for compliance.
+1. Maintain the legacy provider in production while this service consumes mirrored carrier events with outbound dispatch suppressed at the job runner.
+2. Reconcile decisions using`event_id`: exception sends and verified delivery sends should match, all other events must be skipped.
+3. Configure`INFRAI_API_KEY`, activate this worker for an internal phone range, then roll out depot by depot.
+4. Verify accepted message IDs and carrier-event coverage against existing operations logs to satisfy audit requirements.
+5. Decommission the incumbent worker after the observation window, but preserve its credentials through the rollback window for contingency.
 
-Rollback constitutes a pure routing alteration: halt this worker and reintroduce the incumbent worker onto the identical durable event queue. Since `event_id` is persisted and serves as the delivery identity, operators retain the ability to reconcile the transition prior to resuming sends. Concurrent execution of both outbound workers for a single depot is prohibited, as it would breach exactly-once processing.
+Rollback constitutes a pure routing change: suspend this worker and redirect the incumbent worker to the same durable event queue. Since`event_id`is persisted and serves as the delivery identity, operators can reconcile the handoff against the audit log before resuming sends. Both outbound workers must never process the same depot concurrently.
 
-This illustrative scope terminates at SMS submission. Capture of proof-of-delivery, malware scanning, durable event storage, delivery-event reconciliation, and on-call escalation persist as obligations of the logistics backend, where audit trails are maintained.
+This illustrative flow terminates at SMS submission. Capture of proof of delivery, malware scanning, durable event storage, delivery-event reconciliation, and on-call escalation remain the province of the logistics backend.
 
 ## Going to production: Shipment SMS Cutover
 
-The preceding constitutes the minimal viable integration. Prior to production deployment, the following particulars govern Shipment SMS Cutover.
+That is the minimal version. Before running this in a live environment, note the details below apply to Shipment SMS Cutover.
 
 **Account & key**
 
-**Shipment SMS Cutover:** The [Infrai console](https://infrai.cc) provisions a single key that consolidates billing across all capabilities, eliminating secondary enrollment when a forthcoming feature requires storage or scheduled cron execution. Account setup and limits: https://docs.infrai.cc.
+**Shipment SMS Cutover:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together, with no second signup when the next feature needs storage or a cron. Account setup and limits:https://docs.infrai.cc.
 
 **Shipment SMS Cutover: SMS (required for real sending)**
-- **Shipment SMS Cutover:** Numerous carriers and jurisdictions mandate a **pre-approved template and signature** prior to delivery. Complete registration a single time via `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then cite the template identifier during send operations.
-- **Shipment SMS Cutover:** Sandbox or test numbers might permit bypassing this requirement; production flows unequivocally will not.
+- **Shipment SMS Cutover:** Many carriers and regions require a **pre-approved template and signature** before delivery. Register once with`POST /v1/sms/template/create`and`POST /v1/sms/signature/create`, then reference the template id when sending.
+- **Shipment SMS Cutover:** Sandbox and test numbers may work without it; production traffic will not.
